@@ -1,0 +1,150 @@
+# STEP-BY-STEP IMPLEMENTATION GUIDE
+# Taxi Fare Prediction with Weather & Event Dynamic Pricing
+
+## PHASE 1: SETUP & DATA COLLECTION (Day 1-2)
+
+### Step 1.1: Environment Setup
+1. Install Python 3.8+ from python.org
+2. Install Visual Studio Code or PyCharm
+3. Create project folder: taxi-fare-prediction
+4. Open terminal/command prompt in project folder
+
+### Step 1.2: Create Virtual Environment
+python -m venv venv
+source venv/bin/activate # On Windows: venv\Scripts\activate
+
+### Step 1.3: Install Required Libraries
+pip install pandas numpy scikit-learn xgboost lightgbm
+pip install flask matplotlib seaborn
+pip install requests geopy
+
+### Step 1.4: Download Dataset
+1. Go to: https://www.kaggle.com/datasets/anandaramg/taxi-trip-data-nyc
+2. Click "Download" (requires Kaggle account)
+3. Extract train.csv to your project folder
+
+### Step 1.5: Verify Dataset
+import pandas as pd
+df = pd.read_csv('train.csv', nrows=5)
+print(df.head())
+print(df.columns)
+
+## PHASE 2: DATA EXPLORATION & PREPROCESSING (Day 3-4)
+
+### Step 2.1: Load and Explore Data
+import pandas as pd
+df = pd.read_csv('train.csv', nrows=100000)
+print(df.info())
+print(df.describe())
+print(df.isnull().sum())
+
+### Step 2.2: Data Cleaning
+df = df.dropna()
+df = df[df['fare_amount'] > 0]
+df = df[df['fare_amount'] < 200]
+df = df[df['passenger_count'] > 0]
+df = df[df['passenger_count'] <= 6]
+df = df[(df['pickup_latitude'] >= 40.5) & (df['pickup_latitude'] <= 41.0)]
+df = df[(df['pickup_longitude'] >= -74.3) & (df['pickup_longitude'] <= -73.7)]
+df = df[(df['dropoff_latitude'] >= 40.5) & (df['dropoff_latitude'] <= 41.0)]
+df = df[(df['dropoff_longitude'] >= -74.3) & (df['dropoff_longitude'] <= -73.7)]
+print(f"After cleaning: {len(df)} records")
+
+### Step 2.3: Feature Engineering - Trip Distance
+from math import radians, sin, cos, sqrt, atan2
+def calculate_distance(lat1, lon1, lat2, lon2):
+R = 6371
+lat1, lon1, lat2, lon2 = map(radians, [lat1, lon1, lat2, lon2])
+dlat = lat2 - lat1
+dlon = lon2 - lon1
+a = sin(dlat/2)**2 + cos(lat1) * cos(lat2) * sin(dlon/2)**2
+c = 2 * atan2(sqrt(a), sqrt(1-a))
+return R * c
+df['trip_distance'] = df.apply(lambda row: calculate_distance(row['pickup_latitude'], row['pickup_longitude'], row['dropoff_latitude'], row['dropoff_longitude']), axis=1)
+print(df['trip_distance'].describe())
+
+### Step 2.4: Feature Engineering - Time Features
+df['pickup_datetime'] = pd.to_datetime(df['pickup_datetime'])
+df['pickup_hour'] = df['pickup_datetime'].dt.hour
+df['pickup_day'] = df['pickup_datetime'].dt.day
+df['pickup_month'] = df['pickup_datetime'].dt.month
+df['pickup_weekday'] = df['pickup_datetime'].dt.weekday
+df['is_weekend'] = (df['pickup_weekday'] >= 5).astype(int)
+df['is_rush_hour'] = ((df['pickup_hour'] >= 7) & (df['pickup_hour'] <= 9) | (df['pickup_hour'] >= 17) & (df['pickup_hour'] <= 19)).astype(int)
+
+## PHASE 3: MODEL TRAINING (Day 5-6)
+
+### Step 3.1: Prepare Training Data
+from sklearn.model_selection import train_test_split
+feature_columns = ['trip_distance', 'pickup_hour', 'pickup_weekday', 'is_weekend', 'is_rush_hour', 'passenger_count']
+X = df[feature_columns]
+y = df['fare_amount']
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+
+### Step 3.2: Train Baseline Model (Linear Regression)
+from sklearn.linear_model import LinearRegression
+lr_model = LinearRegression()
+lr_model.fit(X_train, y_train)
+y_pred_lr = lr_model.predict(X_test)
+
+### Step 3.3: Train Random Forest Model
+from sklearn.ensemble import RandomForestRegressor
+rf_model = RandomForestRegressor(n_estimators=100, max_depth=15, min_samples_split=5, min_samples_leaf=2, random_state=42, n_jobs=-1)
+rf_model.fit(X_train, y_train)
+y_pred_rf = rf_model.predict(X_test)
+
+### Step 3.4: Train XGBoost Model
+import xgboost as xgb
+xgb_model = xgb.XGBRegressor(n_estimators=100, learning_rate=0.1, max_depth=7, random_state=42, n_jobs=-1)
+xgb_model.fit(X_train, y_train)
+y_pred_xgb = xgb_model.predict(X_test)
+
+### Step 3.5: Compare All Models
+from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
+print("Linear Regression:", mean_squared_error(y_test, y_pred_lr), mean_absolute_error(y_test, y_pred_lr), r2_score(y_test, y_pred_lr))
+print("Random Forest:", mean_squared_error(y_test, y_pred_rf), mean_absolute_error(y_test, y_pred_rf), r2_score(y_test, y_pred_rf))
+print("XGBoost:", mean_squared_error(y_test, y_pred_xgb), mean_absolute_error(y_test, y_pred_xgb), r2_score(y_test, y_pred_xgb))
+
+### Step 3.6: Save the Model
+import pickle
+with open('taxi_fare_model.pkl', 'wb') as f:
+pickle.dump(xgb_model, f)
+with open('feature_columns.pkl', 'wb') as f:
+pickle.dump(feature_columns, f)
+
+## PHASE 4: DYNAMIC PRICING IMPLEMENTATION (Day 7)
+
+### Step 4.1: Pricing Engine Class
+class DynamicPricingEngine:
+def init(self, base_model):
+self.base_model = base_model
+self.weather_multipliers = { 'clear': 1.0, 'cloudy': 1.1, 'rain': 1.3, 'heavy_rain': 1.5, 'snow': 1.7, 'storm': 2.0 }
+self.event_multipliers = { 'none': 1.0, 'holiday': 1.3, 'concert': 1.4, 'sports': 1.5, 'festival': 1.6, 'major_event': 2.5 }
+def predict_base_fare(self, features): return self.base_model.predict(features)
+def calculate_final_fare(self, features, weather='clear', event='none'):
+base_fare = self.predict_base_fare(features)
+weather_mult = self.weather_multipliers.get(weather, 1.0)
+event_mult = self.event_multipliers.get(event, 1.0)
+final_fare = base_fare * weather_mult * event_mult
+return {'base_fare': round(base_fare, 2), 'weather_multiplier': weather_mult, 'event_multiplier': event_mult, 'final_fare': round(final_fare, 2)}
+
+## PHASE 5: WEB APPLICATION DEVELOPMENT (Day 8-9)
+- Implement Flask app in `app/app.py` (see previous code)
+- Create templates index.html and result.html (see previous code)
+
+## PHASE 6: TESTING & DEPLOYMENT (Day 10)
+- Test with various inputs, verify multipliers, check edge cases
+
+## PHASE 7: FUTURE ENHANCEMENTS
+- Real-time weather/event APIs, traffic data, mobile app, dashboard
+
+## TROUBLESHOOTING
+- Out of memory: subsample data
+- Training slow: reduce model size
+- Poor model: check features/outliers
+- Flask errors: check file paths/Python version
+
+## SUCCESS METRICS
+- R² > 0.80, RMSE < $5.00, Web app runs without errors, Fare adjustments work
+
+**Congratulations:** System is ready for real-world use!
